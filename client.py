@@ -7,8 +7,9 @@ import threading
 import time 
 from queue import Queue
 import torchaudio
-
-
+import pyaudio
+# import sounddevice as sd
+# import soundfile as sf
 rtsp_url = 'rtsp://172.16.201.207:8554/audio'
 # Trích xuất raw PCM 16-bit signed little-endian
 SAMPLE_RATE = 44100  # Hz
@@ -37,7 +38,7 @@ import torch
 model, utils = torch.hub.load(repo_or_dir='snakers4/silero-vad', model='silero_vad')
 (get_speech_timestamps, _, read_audio, _, _) = utils
 model.to(torch.device('cuda' if torch.cuda.is_available() else 'cpu'))  # Use GPU if available
-def read_data_from_process(proc, chunk_size=1000000, queue=None):
+def read_data_from_process(proc, chunk_size=10000000, queue=None):
    
     counter = 0
     redundant_data = b''  # To store redundant data if needed
@@ -47,8 +48,8 @@ def read_data_from_process(proc, chunk_size=1000000, queue=None):
            
 
             data = proc.stdout.read(chunk_size)
-            print(len(data))
-            print('counter:', counter)
+            # print(len(data))
+            # print('counter:', counter)
             counter += 1
             
             if queue is not None:
@@ -60,7 +61,33 @@ def read_data_from_process(proc, chunk_size=1000000, queue=None):
             queue.put(None)  # Indicate end of stream
             print("No more data from process.")
             break
+def read_data_from_local_machine(queue=None, chunk_size=10000000):
+    FORMAT = pyaudio.paInt16
+    CHANNELS = 2
+    RATE = 44100
+    CHUNK = chunk_size
+    
+    DEVICE_INDEX = 2 # Replace with your Stereo Mix or loopback device index
 
+    audio = pyaudio.PyAudio()
+
+    # Open stream
+    stream = audio.open(format=FORMAT, channels=CHANNELS,
+                        rate=RATE, input=True,
+                        input_device_index=DEVICE_INDEX,
+                        frames_per_buffer=CHUNK)
+
+    while True:
+        try:
+            data = stream.read(CHUNK, exception_on_overflow=False)
+
+            if queue is not None:
+                queue.put(data)
+            print(f"Recorded {len(data)} bytes of audio data.")
+            time.sleep(1)  # Pause before next recording
+        except Exception as e:
+            print(f"Error during recording: {e}")
+            break
 async def send_data_to_websocket(websocket, queue=None):
     redundant_data = b''  # To store redundant data if needed   
     while True:
@@ -82,19 +109,21 @@ async def send_data_to_websocket(websocket, queue=None):
                     return_seconds=True,  # Return speech timestamps in seconds (default is samples)
                     )
                 last_speech_end = speech_timestamps[-1]['end'] if speech_timestamps else 0
-            
+                # print(f"Last speech end: {last_speech_end} seconds, Data length: {len(data)} bytes")
                 cut_data = redundant_data + data[:seconds2bytes(last_speech_end)] if last_speech_end > 0 else data
                 redundant_data = b''  # Reset redundant data after cutting
                 # print(f"Cut data length: {len(cut_data)} bytes, Last speech end: {last_speech_end} seconds")
                 if last_speech_end > 0:
-                    print("last_speech_end",last_speech_end)
+                    # print("last_speech_end",last_speech_end)
                     redundant_data = data[seconds2bytes(last_speech_end):]
-                    print(f"Redundant data length: {len(redundant_data)} bytes")
-                print(f"Sending data of length: {len(cut_data)} bytes")
+                    # print(f"Redundant data length: {len(redundant_data)} bytes")
+                # print(f"Sending data of length: {len(cut_data)} bytes")
                 await websocket.send(cut_data)
                 # wait for a response if needed
                 response = await websocket.recv()
-                print(f"Received: {response}")
+                current_time = time.strftime("%Y%m%d_%H%M%S")
+                response = f"{current_time} --- {response.split(":")[-1].strip().replace('}"', '')}"  # Extract the text after the first colon and remove quotes
+                print(response)
             else:
                 await asyncio.sleep(0.1)
             
@@ -125,6 +154,8 @@ async def websocket_client():
         # Tạo luồng để đọc dữ liệu từ subprocess
         t1 = threading.Thread(target=read_data_from_process, args=(proc, 1000000, cache_list))
         t1.start()
+        # t1 = threading.Thread(target=read_data_from_local_machine, args=(cache_list, 1000000))
+        # t1.start()
         # await asyncio.sleep(1)
         # Gửi dữ liệu từ luồng đến WebSocket
         await send_data_to_websocket(websocket, cache_list)
