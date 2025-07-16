@@ -140,7 +140,7 @@ class Speech2Text:
     def __init__(self,):
         # self.model = WhisperModel("large-v3-turbo", device="cuda")
         # self.model = WhisperModel("models/models--Systran--faster-whisper-large-v2/snapshots/f0fe81560cb8b68660e564f55dd99207059c092e", device="cuda")
-        stt_model = "small"  # Default model, can be changed based on config
+        stt_model = "tiny.en"  # Default model, can be changed based on config
         self.model_ver = stt_model  
         self.batched_model = BatchedInferencePipeline(
             model=WhisperModel(
